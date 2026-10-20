@@ -48,7 +48,7 @@ def analyze_media_with_gemini(media_file, mime_type, prompt_instruction, api_key
                 contents = [uploaded_file_ref, prompt_instruction]
 
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-3.5-flash",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.2,
