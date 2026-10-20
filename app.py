@@ -1,17 +1,19 @@
-import time
+import tempfile
+import os
 import streamlit as st
-from google import genai
-from google.genai import types
 from PIL import Image
+import numpy as np
+import cv2
+from ultralytics import YOLO
 
 # Page Configuration
 st.set_page_config(
-    page_title="Vision AI — Picture & Video Inspector",
-    page_icon="🎥",
+    page_title="YOLO Vision AI — Object & Scene Detector",
+    page_icon="🤖",
     layout="wide"
 )
 
-# Custom Styling for Dark/Sleek Look
+# Custom Styling
 st.markdown("""
     <style>
     .main {
@@ -27,70 +29,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Helper function to query Gemini Flash with Media (Image or Video)
-def analyze_media_with_gemini(media_file, mime_type, prompt_instruction, api_key):
-    client = genai.Client(api_key=api_key)
-    
-    max_retries = 3
-    backoff = 2
-    
-    for attempt in range(max_retries):
-        try:
-            if mime_type.startswith("image"):
-                image = Image.open(media_file)
-                contents = [image, prompt_instruction]
-            else:
-                # For video files, upload via Gemini Files API or send bytes/file object
-                # Gemini SDK supports direct file uploads or passing uploaded file objects
-                uploaded_file_ref = client.files.upload(file=media_file)
-                
-                # Wait briefly if video processing state requires it, then prompt
-                contents = [uploaded_file_ref, prompt_instruction]
+# Cache YOLO model loading to optimize performance
+@st.cache_resource
+def load_yolo_model():
+    return YOLO("yolov8n.pt")
 
-            response = client.models.generate_content(
-                model="gemini-3.5-flash",
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                )
-            )
-            return response.text
-        except Exception as e:
-            error_str = str(e)
-            if ("503" in error_str or "UNAVAILABLE" in error_str or "429" in error_str) and attempt < max_retries - 1:
-                time.sleep(backoff ** (attempt + 1))
-                continue
-            else:
-                raise e
+model = load_yolo_model()
 
-# UI Header
-st.title("🎥 Vision AI — Picture & Video Inspector")
-st.write("Upload a **photograph** or a **video file** to detect objects, analyze scene events, inspect flaws, or track activities using Gemini Flash.")
+st.title("🤖 YOLO Vision AI — Object Detection for Images & Videos")
+st.write("Upload a picture or video file to detect objects with bounding boxes drawn directly onto your input media.")
 
 # Sidebar Configuration
-st.sidebar.header("⚙️ Configuration")
-api_key_input = st.sidebar.text_input("Gemini API Key", type="password", help="Enter key from Google AI Studio")
-gemini_api_key = st.secrets.get("GEMINI_API_KEY", api_key_input)
+st.sidebar.header("⚙️ Settings")
+confidence_threshold = st.sidebar.slider("Confidence Threshold", min_value=0.1, max_value=1.0, value=0.3, step=0.05)
 
-if not gemini_api_key:
-    st.sidebar.warning("⚠️ Please enter your Gemini API Key or configure it in Streamlit Secrets.")
-
-# Mode Selection
-analysis_mode = st.selectbox(
-    "Select Analysis Focus",
-    [
-        "Comprehensive Object & Scene Inventory",
-        "Defect, Flaw or Anomaly Detection",
-        "Action/Event Breakdown (Best for Videos)",
-        "Custom Prompt Analysis"
-    ]
-)
-
-custom_prompt = ""
-if analysis_mode == "Custom Prompt Analysis":
-    custom_prompt = st.text_input("Enter your custom query for the media:", placeholder="e.g., What happens at timestamp 00:15 in this video?")
-
-# Universal Media Uploader (Images + Videos)
+# Universal Media Uploader
 uploaded_file = st.file_uploader(
     "Upload Media File (Images: JPG, PNG | Videos: MP4, MOV, AVI)",
     type=["jpg", "jpeg", "png", "mp4", "mov", "avi"]
@@ -99,37 +52,68 @@ uploaded_file = st.file_uploader(
 if uploaded_file is not None:
     file_type = uploaded_file.type
     
-    col1, col2 = st.columns([1, 1.2])
-    with col1:
-        if file_type.startswith("image"):
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Uploaded Image Preview", use_column_width=True)
-        else:
-            st.video(uploaded_file)
-            st.caption("Uploaded Video Preview")
+    if file_type.startswith("image"):
+        image = Image.open(uploaded_file)
         
-    with col2:
-        if st.button("Run Multimodal Analysis", type="primary"):
-            if not gemini_api_key:
-                st.error("Missing API Key! Please enter your Gemini API Key in the sidebar.")
-            else:
-                # Map selections to precise prompts
-                if analysis_mode == "Comprehensive Object & Scene Inventory":
-                    prompt = "Analyze this media thoroughly. Identify and list all key objects, people, structures, vehicles, or items present, detailing their roles or movements."
-                elif analysis_mode == "Defect, Flaw or Anomaly Detection":
-                    prompt = "Examine this media meticulously for any visible defects, damages, anomalies, wear-and-tear, or irregularities. Report each finding with potential severity."
-                elif analysis_mode == "Action/Event Breakdown (Best for Videos)":
-                    prompt = "Provide a chronological sequence of events, actions, and key movements shown in this media asset."
-                else:
-                    prompt = custom_prompt if custom_prompt else "Describe everything visible in this media file in detail."
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(image, caption="Original Input Image", use_column_width=True)
+            
+        with col2:
+            if st.button("Run YOLO Detection", type="primary"):
+                with st.spinner("Processing image with YOLO..."):
+                    results = model(image, conf=confidence_threshold)
+                    res_plotted = results[0].plot()
+                    res_rgb = cv2.cvtColor(res_plotted, cv2.COLOR_BGR2RGB)
+                    
+                    st.image(res_rgb, caption="Detected Objects Output", use_column_width=True)
+                    
+                    boxes = results[0].boxes
+                    if len(boxes) > 0:
+                        st.success(f"Detected {len(boxes)} object(s) successfully!")
+                    else:
+                        st.warning("No objects detected above the confidence threshold.")
 
-                with st.spinner("Processing media file with Gemini Flash... (Videos may take a moment to upload and analyze)"):
-                    try:
-                        # Reset file pointer to beginning just in case
-                        uploaded_file.seek(0)
-                        analysis_result = analyze_media_with_gemini(uploaded_file, file_type, prompt, gemini_api_key)
-                        st.success("Analysis Complete!")
-                        st.markdown("### 📊 Inspection & Detection Report")
-                        st.markdown(analysis_result)
-                    except Exception as e:
-                        st.error(f"An error occurred: {str(e)}")
+    else:
+        st.video(uploaded_file)
+        
+        if st.button("Run YOLO Video Object Tracking", type="primary"):
+            with st.spinner("Processing video frames with YOLO... (This may take a moment)"):
+                tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+                tfile.write(uploaded_file.read())
+                tfile.close()
+                
+                cap = cv2.VideoCapture(tfile.name)
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = int(cap.get(cv2.CAP_PROP_FPS))
+                if fps == 0:
+                    fps = 30
+
+                output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+                out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+
+                progress_bar = st.progress(0)
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                frame_count = 0
+
+                while cap.isOpened():
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    
+                    results = model(frame, conf=confidence_threshold, verbose=False)
+                    annotated_frame = results[0].plot()
+                    
+                    out.write(annotated_frame)
+                    frame_count += 1
+                    
+                    if total_frames > 0:
+                        progress_bar.progress(min(frame_count / total_frames, 1.0))
+
+                cap.release()
+                out.release()
+                os.unlink(tfile.name)
+
+                st.success("Video processing complete!")
+                st.video(output_path)
