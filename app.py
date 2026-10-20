@@ -79,6 +79,7 @@ if uploaded_file is not None:
         
         if st.button("Run YOLO Video Object Tracking", type="primary"):
             with st.spinner("Processing video frames with YOLO... (This may take a moment)"):
+                # Save uploaded video to a temporary input file
                 tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
                 tfile.write(uploaded_file.read())
                 tfile.close()
@@ -87,12 +88,19 @@ if uploaded_file is not None:
                 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 fps = int(cap.get(cv2.CAP_PROP_FPS))
-                if fps == 0:
+                if fps == 0 or np.isnan(fps):
                     fps = 30
 
-                # Use .mp4 container and 'mp4v' codec
+                # Define output path using .mp4 extension with 'H264' or 'avc1' codec for browser playback
                 output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
-                out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
+                
+                # Try 'avc1' first for maximum browser support, fallback to 'mp4v' if needed
+                fourcc = cv2.VideoWriter_fourcc(*'avc1')
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                
+                if not out.isOpened():
+                    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
                 progress_bar = st.progress(0)
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -118,10 +126,11 @@ if uploaded_file is not None:
 
                 st.success("Video processing complete!")
                 
-                # Read generated video into bytes and render with explicit format to fix 0:00 playback bug
-                with open(output_path, "rb") as video_file:
-                    video_bytes = video_file.read()
-                st.video(video_bytes, format="video/mp4")
-                
-                # Clean up output temp file
-                os.unlink(output_path)
+                # Read the file safely into memory and display with specific mime-type
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    with open(output_path, "rb") as f:
+                        video_bytes = f.read()
+                    st.video(video_bytes, format="video/mp4")
+                    os.unlink(output_path)
+                else:
+                    st.error("Error: Generated video file is empty or missing.")
