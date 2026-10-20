@@ -90,9 +90,9 @@ if uploaded_file is not None:
                 if fps == 0:
                     fps = 30
 
-                # Use .avi extension and 'XVID' codec for seamless browser playback compatibility
-                output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.avi').name
-                out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'XVID'), fps, (width, height))
+                # Use .mp4 container and 'mp4v' codec
+                output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
+                out = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (width, height))
 
                 progress_bar = st.progress(0)
                 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -117,4 +117,11 @@ if uploaded_file is not None:
                 os.unlink(tfile.name)
 
                 st.success("Video processing complete!")
-                st.video(output_path)
+                
+                # Read generated video into bytes and render with explicit format to fix 0:00 playback bug
+                with open(output_path, "rb") as video_file:
+                    video_bytes = video_file.read()
+                st.video(video_bytes, format="video/mp4")
+                
+                # Clean up output temp file
+                os.unlink(output_path)
